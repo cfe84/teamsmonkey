@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         Teams User extensions
+// @name         Teams User scripts
 // @version      1.0.0
 // @match        https://teams.microsoft.com/v2/*
 // @match        https://teams.cloud.microsoft/v2/*
@@ -31,7 +31,7 @@
       );
       return Array.isArray(value) ? new Set(value) : new Set();
     } catch (error) {
-      console.error("[Teams User extensions]", error);
+      console.error("[Teams User scripts]", error);
       return new Set();
     }
   }
@@ -86,7 +86,7 @@
         ),
       ];
     } catch (error) {
-      console.error("[Teams User extensions]", error);
+      console.error("[Teams User scripts]", error);
       return [MAIN_REPOSITORY];
     }
   }
@@ -218,9 +218,9 @@
   }
 
   async function openGetExtensionsModal() {
-    createModal("Get more extensions", dialog => {
+    createModal("Get more scripts", dialog => {
       const status = document.createElement("p");
-      status.textContent = "Loading extensions…";
+      status.textContent = "Loading scripts…";
       dialog.append(status);
       void (async () => {
         try {
@@ -267,7 +267,7 @@
                 } catch (error) {
                   install.disabled = false;
                   install.textContent = "Install";
-                  console.error("[Teams User extensions]", error);
+                  console.error("[Teams User scripts]", error);
                   status.textContent = `Could not install ${extension.name}: ${error.message}`;
                   dialog.prepend(status);
                 }
@@ -277,12 +277,12 @@
             }
           }
           if (!dialog.querySelector("strong")) {
-            status.textContent = "No extensions were found.";
+            status.textContent = "No scripts were found.";
             dialog.append(status);
           }
         } catch (error) {
-          status.textContent = `Could not load extensions: ${error.message}`;
-          console.error("[Teams User extensions]", error);
+          status.textContent = `Could not load scripts: ${error.message}`;
+          console.error("[Teams User scripts]", error);
         }
       })();
       const footer = document.createElement("div");
@@ -336,7 +336,7 @@
       dialog.append(form);
       const footer = document.createElement("div");
       Object.assign(footer.style, { marginTop: "16px" });
-      footer.append(createLink("Back to extensions", openGetExtensionsModal));
+      footer.append(createLink("Back to scripts", openGetExtensionsModal));
       dialog.append(footer);
     });
   }
@@ -392,7 +392,7 @@
         await restartTeams();
       } catch (error) {
         control.disabled = false;
-        console.error("[Teams User extensions]", error);
+        console.error("[Teams User scripts]", error);
       }
     });
     return control;
@@ -442,7 +442,7 @@
     });
     const title = document.createElement("h2");
     title.id = `${MODAL_ID}-title`;
-    title.textContent = "User extensions";
+    title.textContent = "User scripts";
     Object.assign(title.style, {
       fontSize: "20px",
       lineHeight: "28px",
@@ -468,7 +468,7 @@
 
     if (!extensions.length) {
       const empty = document.createElement("p");
-      empty.textContent = "No user extensions are available.";
+      empty.textContent = "No user scripts are available.";
       dialog.append(empty);
     } else {
       for (const extension of extensions) {
@@ -522,7 +522,7 @@
       marginTop: "16px",
       paddingTop: "12px",
     });
-    footer.append(createLink("Get more extensions", openGetExtensionsModal));
+    footer.append(createLink("Get more scripts", openGetExtensionsModal));
     dialog.append(footer);
 
     backdrop.append(dialog);
@@ -539,7 +539,7 @@
     item.className = referenceItem.className;
     item.setAttribute("role", "menuitem");
     item.tabIndex = 0;
-    item.textContent = "User extensions";
+    item.textContent = "User scripts";
     item.addEventListener("click", openModal);
     item.addEventListener("keydown", event => {
       if (event.key !== "Enter" && event.key !== " ") return;
