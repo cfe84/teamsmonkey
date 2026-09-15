@@ -32,14 +32,14 @@ const debugArguments = "--remote-debugging-port=9223";
 
 const agents = [
   {
-    label: "com.guyfaux.teamsmonkey-env",
+    label: "com.teamsmonkey.env",
     plist: `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.guyfaux.teamsmonkey-env</string>
+  <string>com.teamsmonkey.env</string>
   <key>ProgramArguments</key>
   <array>
     <string>/bin/launchctl</string>
@@ -54,14 +54,14 @@ const agents = [
 `,
   },
   {
-    label: "com.guyfaux.teamsmonkey-loader",
+    label: "com.teamsmonkey.loader",
     plist: `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.guyfaux.teamsmonkey-loader</string>
+  <string>com.teamsmonkey.loader</string>
   <key>ProgramArguments</key>
   <array>
     <string>${escapeXml(process.execPath)}</string>
@@ -88,6 +88,12 @@ const agents = [
 `,
   },
 ];
+const legacyLabels = [
+  "com.guyfaux.teams-userscript-env",
+  "com.guyfaux.teams-userscript-loader",
+  "com.guyfaux.teamsmonkey-env",
+  "com.guyfaux.teamsmonkey-loader",
+];
 
 function escapeXml(value) {
   return value
@@ -113,13 +119,25 @@ function plistPath(agent) {
   return resolve(launchAgentsDirectory, `${agent.label}.plist`);
 }
 
+function legacyPlistPath(label) {
+  return resolve(launchAgentsDirectory, `${label}.plist`);
+}
+
 function unload(agent) {
   runLaunchctl(["bootout", `${domain}/${agent.label}`], [0, 3]);
+}
+
+function removeLegacyAgents() {
+  for (const label of legacyLabels) {
+    runLaunchctl(["bootout", `${domain}/${label}`], [0, 3]);
+    rmSync(legacyPlistPath(label), { force: true });
+  }
 }
 
 function install() {
   mkdirSync(launchAgentsDirectory, { recursive: true });
   mkdirSync(logsDirectory, { recursive: true });
+  removeLegacyAgents();
 
   for (const agent of agents) {
     unload(agent);
@@ -142,6 +160,7 @@ function uninstall() {
     unload(agent);
     rmSync(plistPath(agent), { force: true });
   }
+  removeLegacyAgents();
   runLaunchctl(["unsetenv", "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"]);
   console.log("Stopped and removed the Teams userscript launch agents.");
   console.log("Fully quit and reopen Teams to disable its CDP endpoint.");

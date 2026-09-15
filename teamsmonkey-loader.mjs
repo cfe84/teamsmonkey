@@ -36,6 +36,7 @@ const hosts = requestedHost ? [requestedHost] : ["127.0.0.1", "[::1]"];
 const connections = new Map();
 const relayBindingName = "__teamsVimiumRelay";
 const downloadBindingName = "__teamsmonkeyDownloadScriptBinding";
+const fetchBindingName = "__teamsmonkeyFetchBinding";
 const disabledScriptsStorageKey = "teams.userscripts.disabled";
 let scripts = [];
 let scriptsRevision = 0;
@@ -151,6 +152,36 @@ async function handleDownloadBinding(connection, payload) {
   }
 }
 
+async function handleFetchBinding(connection, payload) {
+  let requestId;
+  try {
+    const request = JSON.parse(payload);
+    requestId = request.requestId;
+    const url = new URL(request.url);
+    if (url.protocol !== "https:") throw new Error("Only HTTPS URLs can be fetched");
+    const response = await fetch(url);
+    const result = {
+      ok: response.ok,
+      status: response.status,
+      text: await response.text(),
+    };
+    await connection.send("Runtime.evaluate", {
+      expression: `globalThis.__teamsmonkeyFetchResult(${JSON.stringify(
+        requestId
+      )}, ${JSON.stringify(result)})`,
+    });
+  } catch (error) {
+    if (requestId) {
+      await connection.send("Runtime.evaluate", {
+        expression: `globalThis.__teamsmonkeyFetchResult(${JSON.stringify(
+          requestId
+        )}, ${JSON.stringify({ ok: false, error: error.message })})`,
+      });
+    }
+    console.error(`Could not fetch userscript repository resource: ${error.message}`);
+  }
+}
+
 function downloadBridgeSource() {
   return `(() => {
     const pending = globalThis.__teamsmonkeyDownloadScriptPending ??= new Map();
@@ -165,6 +196,24 @@ function downloadBridgeSource() {
       const requestId = String(++nextRequestId);
       pending.set(requestId, { resolve, reject });
       globalThis.${downloadBindingName}(JSON.stringify({ requestId, ...payload }));
+    });
+  })()`;
+}
+
+function fetchBridgeSource() {
+  return `(() => {
+    const pending = globalThis.__teamsmonkeyFetchPending ??= new Map();
+    let nextRequestId = 0;
+    globalThis.__teamsmonkeyFetchResult = (requestId, result) => {
+      const request = pending.get(requestId);
+      if (!request) return;
+      pending.delete(requestId);
+      result.ok ? request.resolve(result) : request.reject(new Error(result.error));
+    };
+    globalThis.__teamsmonkeyFetch = url => new Promise((resolve, reject) => {
+      const requestId = String(++nextRequestId);
+      pending.set(requestId, { resolve, reject });
+      globalThis.${fetchBindingName}(JSON.stringify({ requestId, url }));
     });
   })()`;
 }
@@ -398,6 +447,13 @@ function connect(webSocketUrl) {
         void handleDownloadBinding(connection, message.params.payload);
         return;
       }
+      if (
+        message.method === "Runtime.bindingCalled" &&
+        message.params?.name === fetchBindingName
+      ) {
+        void handleFetchBinding(connection, message.params.payload);
+        return;
+      }
       const request = pending.get(message.id);
       if (!request) return;
       clearTimeout(request.timeout);
@@ -437,6 +493,9 @@ async function installScripts(connection, target, context, disabledScripts) {
   await connection
     .send("Runtime.addBinding", { name: downloadBindingName })
     .catch(() => {});
+  await connection
+    .send("Runtime.addBinding", { name: fetchBindingName })
+    .catch(() => {});
   await connection.send("Page.enable");
   const contextSource = hintContextSource(context);
   const contextRegistration = await connection.send(
@@ -458,6 +517,9 @@ async function installScripts(connection, target, context, disabledScripts) {
   });
   await connection.send("Runtime.evaluate", {
     expression: downloadBridgeSource(),
+  });
+  await connection.send("Runtime.evaluate", {
+    expression: fetchBridgeSource(),
   });
 
   for (const script of scripts) {

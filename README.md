@@ -47,3 +47,6 @@ npm run service:uninstall
 The loader must be connected to a loopback-only CDP endpoint. CDP has no
 authentication, so any local process that can reach the endpoint can inspect
 and control signed-in Teams content.
+
+The launch agents are named `com.teamsmonkey.env` and
+`com.teamsmonkey.loader`.

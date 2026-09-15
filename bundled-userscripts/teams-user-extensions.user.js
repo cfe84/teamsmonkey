@@ -1,5 +1,6 @@
 // ==UserScript==
 // @name         Teams User extensions
+// @version      1.0.0
 // @match        https://teams.microsoft.com/v2/*
 // @match        https://teams.cloud.microsoft/v2/*
 // @match        https://local.teams.office.com/v2/*
@@ -124,6 +125,17 @@
     return new URL(path, `${indexUrl.origin}${indexUrl.pathname.replace(/[^/]+$/, "")}`).toString();
   }
 
+  async function fetchRepositoryResource(url) {
+    if (typeof globalThis.__teamsmonkeyFetch === "function") {
+      const result = await globalThis.__teamsmonkeyFetch(url);
+      if (!result.ok) throw new Error(`HTTP ${result.status}`);
+      return result.text;
+    }
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return response.text();
+  }
+
   function createLink(text, onClick) {
     const link = document.createElement("button");
     link.type = "button";
@@ -215,9 +227,16 @@
           const repositories = readRepositories();
           const results = await Promise.all(
             repositories.map(async repository => {
-              const response = await fetch(repository.indexUrl);
-              if (!response.ok) throw new Error(`${repository.name}: HTTP ${response.status}`);
-              return { repository, index: await response.json() };
+              try {
+                return {
+                  repository,
+                  index: JSON.parse(
+                    await fetchRepositoryResource(repository.indexUrl)
+                  ),
+                };
+              } catch (error) {
+                throw new Error(`${repository.name}: ${error.message}`);
+              }
             })
           );
           status.remove();
@@ -237,11 +256,12 @@
                 install.disabled = true;
                 install.textContent = "Installing…";
                 try {
-                  const response = await fetch(repositoryScriptUrl(repository, extension));
-                  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                  const source = await fetchRepositoryResource(
+                    repositoryScriptUrl(repository, extension)
+                  );
                   await globalThis.__teamsmonkeyDownloadScript({
                     filename: extension.filename ?? extension.path?.split("/").pop(),
-                    source: await response.text(),
+                    source,
                   });
                   install.textContent = "Installed";
                 } catch (error) {
