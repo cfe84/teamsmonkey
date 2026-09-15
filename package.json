@@ -1,0 +1,14 @@
+{
+  "name": "teamsmonkey",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Teamsmonkey loads UserScripts into Microsoft Teams through its local CDP endpoint.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "service:install": "node scripts/manage-launch-agents.mjs install",
+    "service:uninstall": "node scripts/manage-launch-agents.mjs uninstall"
+  }
+}
