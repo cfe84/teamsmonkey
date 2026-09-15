@@ -6,6 +6,7 @@ import {
   readdirSync,
   readFileSync,
   statSync,
+  unlinkSync,
   watch,
   writeFileSync,
 } from "node:fs";
@@ -37,6 +38,7 @@ const connections = new Map();
 const relayBindingName = "__teamsVimiumRelay";
 const downloadBindingName = "__teamsmonkeyDownloadScriptBinding";
 const fetchBindingName = "__teamsmonkeyFetchBinding";
+const removeBindingName = "__teamsmonkeyRemoveScriptBinding";
 const disabledScriptsStorageKey = "teams.userscripts.disabled";
 let scripts = [];
 let scriptsRevision = 0;
@@ -127,6 +129,19 @@ function persistDownloadedScript(payload) {
   return { filename };
 }
 
+function removeUserScript(payload) {
+  if (!payload || typeof payload.filename !== "string") {
+    throw new Error("A script filename is required");
+  }
+  const filename = basename(payload.filename);
+  if (filename !== payload.filename || !filename.endsWith(".user.js")) {
+    throw new Error("Only .user.js files can be removed");
+  }
+  unlinkSync(resolve(scriptsDirectory, filename));
+  loadScripts();
+  return { filename };
+}
+
 async function handleDownloadBinding(connection, payload) {
   try {
     const request = JSON.parse(payload);
@@ -182,6 +197,29 @@ async function handleFetchBinding(connection, payload) {
   }
 }
 
+async function handleRemoveBinding(connection, payload) {
+  let requestId;
+  try {
+    const request = JSON.parse(payload);
+    requestId = request.requestId;
+    const result = removeUserScript(request);
+    await connection.send("Runtime.evaluate", {
+      expression: `globalThis.__teamsmonkeyRemoveScriptResult(${JSON.stringify(
+        requestId
+      )}, ${JSON.stringify({ ok: true, ...result })})`,
+    });
+  } catch (error) {
+    if (requestId) {
+      await connection.send("Runtime.evaluate", {
+        expression: `globalThis.__teamsmonkeyRemoveScriptResult(${JSON.stringify(
+          requestId
+        )}, ${JSON.stringify({ ok: false, error: error.message })})`,
+      });
+    }
+    console.error(`Could not remove userscript: ${error.message}`);
+  }
+}
+
 function downloadBridgeSource() {
   return `(() => {
     const pending = globalThis.__teamsmonkeyDownloadScriptPending ??= new Map();
@@ -214,6 +252,24 @@ function fetchBridgeSource() {
       const requestId = String(++nextRequestId);
       pending.set(requestId, { resolve, reject });
       globalThis.${fetchBindingName}(JSON.stringify({ requestId, url }));
+    });
+  })()`;
+}
+
+function removeBridgeSource() {
+  return `(() => {
+    const pending = globalThis.__teamsmonkeyRemoveScriptPending ??= new Map();
+    let nextRequestId = 0;
+    globalThis.__teamsmonkeyRemoveScriptResult = (requestId, result) => {
+      const request = pending.get(requestId);
+      if (!request) return;
+      pending.delete(requestId);
+      result.ok ? request.resolve(result) : request.reject(new Error(result.error));
+    };
+    globalThis.__teamsmonkeyRemoveScript = payload => new Promise((resolve, reject) => {
+      const requestId = String(++nextRequestId);
+      pending.set(requestId, { resolve, reject });
+      globalThis.${removeBindingName}(JSON.stringify({ requestId, ...payload }));
     });
   })()`;
 }
@@ -309,6 +365,8 @@ function userscriptManifestSource() {
   const manifest = scripts.map(script => ({
       name: script.name,
       toggleable: script.toggleable,
+      filename: basename(script.path),
+      removable: dirname(script.path) !== bundledScriptsDirectory,
       includes: script.includes.map(pattern => pattern.source),
       excludes: script.excludes.map(pattern => pattern.source),
     }));
@@ -317,7 +375,12 @@ function userscriptManifestSource() {
       extension.includes.some(value => new RegExp(value).test(location.href)) &&
       !extension.excludes.some(value => new RegExp(value).test(location.href))
     )
-    .map(({ name, toggleable }) => ({ name, toggleable }))`;
+    .map(({ name, toggleable, filename, removable }) => ({
+      name,
+      toggleable,
+      filename,
+      removable,
+    }))`;
 }
 
 async function ensureScripts(connection, target, context, disabledScripts) {
@@ -454,6 +517,13 @@ function connect(webSocketUrl) {
         void handleFetchBinding(connection, message.params.payload);
         return;
       }
+      if (
+        message.method === "Runtime.bindingCalled" &&
+        message.params?.name === removeBindingName
+      ) {
+        void handleRemoveBinding(connection, message.params.payload);
+        return;
+      }
       const request = pending.get(message.id);
       if (!request) return;
       clearTimeout(request.timeout);
@@ -496,6 +566,9 @@ async function installScripts(connection, target, context, disabledScripts) {
   await connection
     .send("Runtime.addBinding", { name: fetchBindingName })
     .catch(() => {});
+  await connection
+    .send("Runtime.addBinding", { name: removeBindingName })
+    .catch(() => {});
   await connection.send("Page.enable");
   const contextSource = hintContextSource(context);
   const contextRegistration = await connection.send(
@@ -520,6 +593,9 @@ async function installScripts(connection, target, context, disabledScripts) {
   });
   await connection.send("Runtime.evaluate", {
     expression: fetchBridgeSource(),
+  });
+  await connection.send("Runtime.evaluate", {
+    expression: removeBridgeSource(),
   });
 
   for (const script of scripts) {

@@ -70,8 +70,11 @@
     restartButton.click();
   }
 
-  function closeModal() {
-    document.getElementById(MODAL_ID)?.remove();
+  function closeModal(runHandler = false) {
+    const modal = document.getElementById(MODAL_ID);
+    const handler = modal?.__teamsUserExtensionsOnClose;
+    modal?.remove();
+    if (runHandler) handler?.();
   }
 
   function readRepositories() {
@@ -153,10 +156,11 @@
     return link;
   }
 
-  function createModal(titleText, contentBuilder) {
+  function createModal(titleText, contentBuilder, onClose) {
     closeModal();
     const backdrop = document.createElement("div");
     backdrop.id = MODAL_ID;
+    backdrop.__teamsUserExtensionsOnClose = onClose;
     Object.assign(backdrop.style, {
       alignItems: "center",
       background: "rgba(0, 0, 0, 0.4)",
@@ -205,13 +209,13 @@
       lineHeight: "24px",
       width: "32px",
     });
-    closeButton.addEventListener("click", closeModal);
+    closeButton.addEventListener("click", () => closeModal(true));
     header.append(heading, closeButton);
     dialog.append(header);
     contentBuilder(dialog);
     backdrop.append(dialog);
     backdrop.addEventListener("click", event => {
-      if (event.target === backdrop) closeModal();
+      if (event.target === backdrop) closeModal(true);
     });
     document.body.append(backdrop);
     closeButton.focus();
@@ -289,7 +293,7 @@
       Object.assign(footer.style, { borderTop: "1px solid var(--colorNeutralStroke2, #e0e0e0)", marginTop: "16px", paddingTop: "12px" });
       footer.append(createLink("Manage repositories", () => openRepositoriesModal()));
       dialog.append(footer);
-    });
+    }, openModal);
   }
 
   function openRepositoriesModal() {
@@ -338,7 +342,7 @@
       Object.assign(footer.style, { marginTop: "16px" });
       footer.append(createLink("Back to scripts", openGetExtensionsModal));
       dialog.append(footer);
-    });
+    }, openGetExtensionsModal);
   }
 
   function openExtensionSettings(extension) {
@@ -508,6 +512,22 @@
             openExtensionSettings(extension)
           );
           actions.append(settingsLink);
+        }
+
+        if (extension.removable) {
+          const removeLink = createLink("Remove", async () => {
+            removeLink.disabled = true;
+            try {
+              await globalThis.__teamsmonkeyRemoveScript({
+                filename: extension.filename,
+              });
+              await restartTeams();
+            } catch (error) {
+              removeLink.disabled = false;
+              console.error("[Teams User scripts]", error);
+            }
+          });
+          actions.append(removeLink);
         }
 
         actions.append(createSwitch(extension, enabled));
