@@ -18,6 +18,12 @@ Installed scripts are loaded from:
 Set `TEAMSMONKEY_SCRIPT_PATH` to use a different directory. The bundled manager
 is always available and does not need to be copied into the scripts directory.
 
+For local development, use **Manage directories (Dev)** in the User scripts
+menu to add or remove script directories. Those directories are persisted in
+the Teamsmonkey configuration and scanned at loader startup and whenever their
+contents change. Scripts in the cache directory take precedence over
+development-directory scripts with the same filename.
+
 Private GitHub script repositories are supported through the local Node loader.
 If GitHub CLI is installed and authenticated, Teamsmonkey automatically uses
 `gh auth token` without copying the token into Teams. You can also provide a

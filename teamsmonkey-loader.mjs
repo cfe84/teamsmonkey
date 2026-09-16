@@ -27,9 +27,14 @@ const defaultScriptsDirectory =
   process.platform === "win32"
     ? resolve(process.env.APPDATA ?? resolve(homedir(), "AppData/Roaming"), "teamsmonkey/scripts")
     : resolve(process.env.XDG_CONFIG_HOME ?? resolve(homedir(), ".config"), "teamsmonkey/scripts");
+const configDirectory = resolve(
+  process.env.XDG_CONFIG_HOME ?? resolve(homedir(), ".config"),
+  "teamsmonkey"
+);
 const scriptsDirectory = resolve(
   option("--scripts", process.env.TEAMSMONKEY_SCRIPT_PATH ?? defaultScriptsDirectory)
 );
+const directoriesConfigPath = resolve(configDirectory, "script-directories.json");
 const bundledScriptsDirectory = resolve(repositoryDirectory, "bundled-userscripts");
 const targetFilter = option("--target", "teams.");
 const requestedHost = option("--host", null);
@@ -40,11 +45,46 @@ const relayBindingName = "__teamsVimiumRelay";
 const downloadBindingName = "__teamsmonkeyDownloadScriptBinding";
 const fetchBindingName = "__teamsmonkeyFetchBinding";
 const removeBindingName = "__teamsmonkeyRemoveScriptBinding";
+const directoriesBindingName = "__teamsmonkeyScriptDirectoriesBinding";
 const disabledScriptsStorageKey = "teams.userscripts.disabled";
 const githubToken = getGitHubToken();
 let scripts = [];
 let scriptsRevision = 0;
 let reloadTimer;
+let scriptDirectories = [];
+
+function readScriptDirectories() {
+  try {
+    const value = JSON.parse(readFileSync(directoriesConfigPath, "utf8"));
+    return Array.isArray(value)
+      ? value
+          .filter(value => typeof value === "string")
+          .map(directory => resolve(directory))
+      : [];
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      console.error(`Could not read script directories: ${error.message}`);
+    }
+    return [];
+  }
+}
+
+function writeScriptDirectories() {
+  mkdirSync(configDirectory, { recursive: true });
+  writeFileSync(
+    directoriesConfigPath,
+    `${JSON.stringify(scriptDirectories, null, 2)}\n`,
+    "utf8"
+  );
+}
+
+function watchScriptDirectory(directory) {
+  try {
+    watch(directory, scheduleReload);
+  } catch (error) {
+    console.error(`Could not watch script directory ${directory}: ${error.message}`);
+  }
+}
 
 function getGitHubToken() {
   if (process.env.TEAMSMONKEY_GITHUB_TOKEN) {
@@ -97,15 +137,29 @@ function readMetadata(source) {
 }
 
 function loadScripts() {
-  const bundledNames = new Set(readdirSync(bundledScriptsDirectory));
-  const candidates = [...bundledNames, ...readdirSync(scriptsDirectory)]
-    .filter(name => name.endsWith(".user.js"))
-    .sort();
-  scripts = [...new Set(candidates)].map(name => {
-    const path = resolve(
-      bundledNames.has(name) ? bundledScriptsDirectory : scriptsDirectory,
-      name
-    );
+  const sources = [
+    bundledScriptsDirectory,
+    scriptsDirectory,
+    ...scriptDirectories,
+  ];
+  const paths = new Map();
+  for (const directory of sources) {
+    let names;
+    try {
+      names = readdirSync(directory);
+    } catch (error) {
+      if (error.code !== "ENOENT") {
+        console.error(`Could not read script directory ${directory}: ${error.message}`);
+      }
+      continue;
+    }
+    for (const name of names) {
+      if (name.endsWith(".user.js") && !paths.has(name)) {
+        paths.set(name, resolve(directory, name));
+      }
+    }
+  }
+  scripts = [...paths.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([name, path]) => {
       const source = readFileSync(path, "utf8");
       const metadata = readMetadata(source);
       const includes = [
@@ -139,6 +193,36 @@ function loadScripts() {
   );
 }
 
+function listScriptDirectories() {
+  return [...scriptDirectories];
+}
+
+function addScriptDirectory(payload) {
+  if (!payload || typeof payload.path !== "string" || !payload.path.trim()) {
+    throw new Error("A directory path is required");
+  }
+  const path = resolve(payload.path.trim());
+  if (!statSync(path).isDirectory()) throw new Error("The path is not a directory");
+  if (!scriptDirectories.includes(path)) {
+    scriptDirectories.push(path);
+    writeScriptDirectories();
+    loadScripts();
+    watchScriptDirectory(path);
+  }
+  return { path, directories: listScriptDirectories() };
+}
+
+function removeScriptDirectory(payload) {
+  if (!payload || typeof payload.path !== "string") {
+    throw new Error("A directory path is required");
+  }
+  const path = resolve(payload.path);
+  scriptDirectories = scriptDirectories.filter(directory => directory !== path);
+  writeScriptDirectories();
+  loadScripts();
+  return { path, directories: listScriptDirectories() };
+}
+
 function persistDownloadedScript(payload) {
   if (
     !payload ||
@@ -150,6 +234,9 @@ function persistDownloadedScript(payload) {
   const filename = basename(payload.filename);
   if (filename !== payload.filename || !filename.endsWith(".user.js")) {
     throw new Error("Only .user.js files can be installed");
+  }
+  if (!/^\s*\/\/\s*==UserScript==/m.test(payload.source)) {
+    throw new Error("Downloaded file is not a valid UserScript");
   }
   mkdirSync(scriptsDirectory, { recursive: true });
   writeFileSync(resolve(scriptsDirectory, filename), payload.source, "utf8");
@@ -248,7 +335,40 @@ async function handleRemoveBinding(connection, payload) {
         )}, ${JSON.stringify({ ok: false, error: error.message })})`,
       });
     }
+
     console.error(`Could not remove userscript: ${error.message}`);
+  }
+}
+
+async function handleDirectoriesBinding(connection, payload) {
+  let requestId;
+  try {
+    const request = JSON.parse(payload);
+    requestId = request.requestId;
+    const result =
+      request.action === "list"
+        ? { directories: listScriptDirectories() }
+        : request.action === "add"
+          ? addScriptDirectory(request)
+          : request.action === "remove"
+            ? removeScriptDirectory(request)
+            : (() => {
+                throw new Error("Unknown directory action");
+              })();
+    await connection.send("Runtime.evaluate", {
+      expression: `globalThis.__teamsmonkeyScriptDirectoriesResult(${JSON.stringify(
+        requestId
+      )}, ${JSON.stringify({ ok: true, ...result })})`,
+    });
+  } catch (error) {
+    if (requestId) {
+      await connection.send("Runtime.evaluate", {
+        expression: `globalThis.__teamsmonkeyScriptDirectoriesResult(${JSON.stringify(
+          requestId
+        )}, ${JSON.stringify({ ok: false, error: error.message })})`,
+      });
+    }
+    console.error(`Could not manage script directories: ${error.message}`);
   }
 }
 
@@ -302,6 +422,24 @@ function removeBridgeSource() {
       const requestId = String(++nextRequestId);
       pending.set(requestId, { resolve, reject });
       globalThis.${removeBindingName}(JSON.stringify({ requestId, ...payload }));
+    });
+  })()`;
+}
+
+function directoriesBridgeSource() {
+  return `(() => {
+    const pending = globalThis.__teamsmonkeyScriptDirectoriesPending ??= new Map();
+    let nextRequestId = 0;
+    globalThis.__teamsmonkeyScriptDirectoriesResult = (requestId, result) => {
+      const request = pending.get(requestId);
+      if (!request) return;
+      pending.delete(requestId);
+      result.ok ? request.resolve(result) : request.reject(new Error(result.error));
+    };
+    globalThis.__teamsmonkeyScriptDirectories = payload => new Promise((resolve, reject) => {
+      const requestId = String(++nextRequestId);
+      pending.set(requestId, { resolve, reject });
+      globalThis.${directoriesBindingName}(JSON.stringify({ requestId, ...payload }));
     });
   })()`;
 }
@@ -399,7 +537,10 @@ function userscriptManifestSource() {
     toggleable: script.toggleable,
     version: script.version,
     filename: basename(script.path),
-    removable: dirname(script.path) !== bundledScriptsDirectory,
+    sourcePath: scriptDirectories.includes(dirname(script.path))
+      ? script.path
+      : undefined,
+    removable: dirname(script.path) === scriptsDirectory,
     includes: script.includes.map(pattern => pattern.source),
     excludes: script.excludes.map(pattern => pattern.source),
   }));
@@ -408,11 +549,12 @@ function userscriptManifestSource() {
       extension.includes.some(value => new RegExp(value).test(location.href)) &&
       !extension.excludes.some(value => new RegExp(value).test(location.href))
     )
-    .map(({ name, version, toggleable, filename, removable }) => ({
+    .map(({ name, version, toggleable, filename, sourcePath, removable }) => ({
       name,
       version,
       toggleable,
       filename,
+      sourcePath,
       removable,
     }))`;
 }
@@ -558,6 +700,13 @@ function connect(webSocketUrl) {
         void handleRemoveBinding(connection, message.params.payload);
         return;
       }
+      if (
+        message.method === "Runtime.bindingCalled" &&
+        message.params?.name === directoriesBindingName
+      ) {
+        void handleDirectoriesBinding(connection, message.params.payload);
+        return;
+      }
       const request = pending.get(message.id);
       if (!request) return;
       clearTimeout(request.timeout);
@@ -603,6 +752,9 @@ async function installScripts(connection, target, context, disabledScripts) {
   await connection
     .send("Runtime.addBinding", { name: removeBindingName })
     .catch(() => {});
+  await connection
+    .send("Runtime.addBinding", { name: directoriesBindingName })
+    .catch(() => {});
   await connection.send("Page.enable");
   const contextSource = hintContextSource(context);
   const contextRegistration = await connection.send(
@@ -630,6 +782,9 @@ async function installScripts(connection, target, context, disabledScripts) {
   });
   await connection.send("Runtime.evaluate", {
     expression: removeBridgeSource(),
+  });
+  await connection.send("Runtime.evaluate", {
+    expression: directoriesBridgeSource(),
   });
 
   for (const script of scripts) {
@@ -768,8 +923,10 @@ mkdirSync(scriptsDirectory, { recursive: true });
 if (!statSync(bundledScriptsDirectory).isDirectory()) {
   throw new Error(`Not a directory: ${bundledScriptsDirectory}`);
 }
+scriptDirectories = readScriptDirectories();
 loadScripts();
-watch(scriptsDirectory, scheduleReload);
+watchScriptDirectory(scriptsDirectory);
+for (const directory of scriptDirectories) watchScriptDirectory(directory);
 console.log(
   `Watching ${scriptsDirectory}; bundled scripts from ${bundledScriptsDirectory}; looking for Teams CDP targets on localhost:${port}`
 );

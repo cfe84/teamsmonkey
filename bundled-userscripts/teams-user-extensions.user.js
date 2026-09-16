@@ -399,9 +399,85 @@
       })();
       const footer = document.createElement("div");
       Object.assign(footer.style, { borderTop: "1px solid var(--colorNeutralStroke2, #e0e0e0)", marginTop: "16px", paddingTop: "12px" });
-      footer.append(createLink("Manage repositories", () => openRepositoriesModal()));
+      footer.append(
+        createLink("Manage repositories", () => openRepositoriesModal()),
+        document.createTextNode(" · "),
+        createLink("Manage directories (Dev)", openDirectoriesModal)
+      );
       dialog.append(footer);
     }, openModal);
+  }
+
+  function openDirectoriesModal() {
+    createModal("Manage directories (Dev)", dialog => {
+      const status = document.createElement("p");
+      const list = document.createElement("div");
+      const call = globalThis.__teamsmonkeyScriptDirectories;
+      const render = directories => {
+        list.replaceChildren();
+        if (!directories.length) {
+          const empty = document.createElement("p");
+          empty.textContent = "No development directories configured.";
+          list.append(empty);
+        }
+        for (const path of directories) {
+          const row = document.createElement("div");
+          Object.assign(row.style, { alignItems: "center", borderTop: "1px solid var(--colorNeutralStroke2, #e0e0e0)", display: "flex", justifyContent: "space-between", padding: "10px 0" });
+          row.append(document.createTextNode(path));
+          row.append(createLink("Remove", async () => {
+            try {
+              const result = await call({ action: "remove", path });
+              render(result.directories);
+              status.textContent = "Directory removed. Restart Teams to unload its scripts.";
+            } catch (error) {
+              status.textContent = `Could not remove directory: ${error.message}`;
+              status.style.color = "#d13438";
+            }
+          }));
+          list.append(row);
+        }
+      };
+      dialog.append(status, list);
+      if (typeof call !== "function") {
+        status.textContent = "Directory management is only available in the Teamsmonkey desktop loader.";
+        status.style.color = "#d13438";
+        return;
+      }
+      void call({ action: "list" }).then(result => render(result.directories)).catch(error => {
+        status.textContent = `Could not load directories: ${error.message}`;
+        status.style.color = "#d13438";
+      });
+      const form = document.createElement("form");
+      const input = document.createElement("input");
+      input.placeholder = "/path/to/local/userscripts";
+      input.required = true;
+      Object.assign(input.style, { boxSizing: "border-box", marginTop: "16px", padding: "8px", width: "100%" });
+      const add = document.createElement("button");
+      add.type = "submit";
+      add.textContent = "Add directory";
+      Object.assign(add.style, { marginTop: "8px", padding: "6px 12px" });
+      form.append(input, add);
+      form.addEventListener("submit", event => {
+        event.preventDefault();
+        add.disabled = true;
+        void call({ action: "add", path: input.value }).then(result => {
+          render(result.directories);
+          input.value = "";
+          status.textContent = "Directory added. Restart Teams to load its scripts.";
+          status.style.color = "";
+        }).catch(error => {
+          status.textContent = `Could not add directory: ${error.message}`;
+          status.style.color = "#d13438";
+        }).finally(() => {
+          add.disabled = false;
+        });
+      });
+      dialog.append(form);
+      const footer = document.createElement("div");
+      Object.assign(footer.style, { marginTop: "16px" });
+      footer.append(createLink("Back to scripts", openGetExtensionsModal));
+      dialog.append(footer);
+    }, openGetExtensionsModal);
   }
 
   function openRepositoriesModal() {
@@ -612,7 +688,23 @@
           minHeight: "52px",
         });
         const label = document.createElement("span");
-        label.textContent = extension.name;
+        label.textContent = `${extension.name} (v${extension.version ?? "0.0.0"})`;
+        if (extension.sourcePath) {
+          const source = document.createElement("small");
+          source.textContent = extension.sourcePath;
+          source.title = extension.sourcePath;
+          Object.assign(source.style, {
+            color: "var(--colorNeutralForeground3, #616161)",
+            display: "block",
+            fontSize: "12px",
+            lineHeight: "16px",
+            marginTop: "2px",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          });
+          label.append(document.createElement("br"), source);
+        }
         const actions = document.createElement("span");
         Object.assign(actions.style, {
           alignItems: "center",
