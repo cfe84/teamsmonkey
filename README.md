@@ -4,10 +4,11 @@ Teamsmonkey is a sidecar UserScript loader for the Microsoft Teams desktop
 client. It attaches to the local Chrome DevTools Protocol endpoint exposed by
 the embedded web runtime, without modifying the signed Teams application.
 
-The bundled **User extensions** manager lets you enable and disable installed
+The bundled **User scripts** manager lets you enable and disable installed
 scripts, browse the default
 [teams-user-scripts](https://github.com/cfe84/teams-user-scripts) catalogue,
-install scripts, and manage additional compatible repositories.
+install scripts, manage additional compatible repositories, and check for
+updates. Updates are checked when Teams loads and hourly while it is running.
 
 Installed scripts are loaded from:
 
@@ -16,6 +17,14 @@ Installed scripts are loaded from:
 
 Set `TEAMSMONKEY_SCRIPT_PATH` to use a different directory. The bundled manager
 is always available and does not need to be copied into the scripts directory.
+
+Private GitHub script repositories are supported through the local Node loader.
+If GitHub CLI is installed and authenticated, Teamsmonkey automatically uses
+`gh auth token` without copying the token into Teams. You can also provide a
+token explicitly with `TEAMSMONKEY_GITHUB_TOKEN`; `TEAMSMONKEY_GH_PATH` can be
+used when `gh` is installed outside the standard locations. Tokens are used
+only for requests to `raw.githubusercontent.com` and are never exposed to the
+page or persisted by Teamsmonkey.
 
 ## Run the loader
 

@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, resolve } from "node:path";
+import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const args = process.argv.slice(2);
@@ -40,9 +41,35 @@ const downloadBindingName = "__teamsmonkeyDownloadScriptBinding";
 const fetchBindingName = "__teamsmonkeyFetchBinding";
 const removeBindingName = "__teamsmonkeyRemoveScriptBinding";
 const disabledScriptsStorageKey = "teams.userscripts.disabled";
+const githubToken = getGitHubToken();
 let scripts = [];
 let scriptsRevision = 0;
 let reloadTimer;
+
+function getGitHubToken() {
+  if (process.env.TEAMSMONKEY_GITHUB_TOKEN) {
+    return process.env.TEAMSMONKEY_GITHUB_TOKEN;
+  }
+
+  for (const command of [
+    process.env.TEAMSMONKEY_GH_PATH,
+    "/opt/homebrew/bin/gh",
+    "/usr/local/bin/gh",
+    "gh",
+  ].filter(Boolean)) {
+    try {
+      const token = execFileSync(command, ["auth", "token"], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim();
+      if (token) return token;
+    } catch {
+      // GitHub authentication is optional for public repositories.
+    }
+  }
+
+  return null;
+}
 
 function wildcardToRegExp(value) {
   return new RegExp(
@@ -92,6 +119,7 @@ function loadScripts() {
 
       return {
         name: metadata.get("name")?.[0] ?? name,
+        version: metadata.get("version")?.[0] ?? "0.0.0",
         path,
         source,
         hash: createHash("sha256").update(source).digest("hex").slice(0, 12),
@@ -174,7 +202,11 @@ async function handleFetchBinding(connection, payload) {
     requestId = request.requestId;
     const url = new URL(request.url);
     if (url.protocol !== "https:") throw new Error("Only HTTPS URLs can be fetched");
-    const response = await fetch(url);
+    const headers = {};
+    if (githubToken && url.hostname === "raw.githubusercontent.com") {
+      headers.Authorization = `Bearer ${githubToken}`;
+    }
+    const response = await fetch(url, { headers });
     const result = {
       ok: response.ok,
       status: response.status,
@@ -363,20 +395,22 @@ ${script.source}
 
 function userscriptManifestSource() {
   const manifest = scripts.map(script => ({
-      name: script.name,
-      toggleable: script.toggleable,
-      filename: basename(script.path),
-      removable: dirname(script.path) !== bundledScriptsDirectory,
-      includes: script.includes.map(pattern => pattern.source),
-      excludes: script.excludes.map(pattern => pattern.source),
-    }));
+    name: script.name,
+    toggleable: script.toggleable,
+    version: script.version,
+    filename: basename(script.path),
+    removable: dirname(script.path) !== bundledScriptsDirectory,
+    includes: script.includes.map(pattern => pattern.source),
+    excludes: script.excludes.map(pattern => pattern.source),
+  }));
   return `globalThis.__teamsUserscriptManifest = ${JSON.stringify(manifest)}
     .filter(extension =>
       extension.includes.some(value => new RegExp(value).test(location.href)) &&
       !extension.excludes.some(value => new RegExp(value).test(location.href))
     )
-    .map(({ name, toggleable, filename, removable }) => ({
+    .map(({ name, version, toggleable, filename, removable }) => ({
       name,
+      version,
       toggleable,
       filename,
       removable,

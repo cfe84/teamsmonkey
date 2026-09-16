@@ -23,6 +23,9 @@
   };
   const MENU_ITEM_ID = "teams-user-extensions-menu-item";
   const MODAL_ID = "teams-user-extensions-modal";
+  const UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000;
+  let updateState = new Map();
+  let updateCheckPromise;
 
   function readDisabledExtensions() {
     try {
@@ -107,12 +110,21 @@
 
   function repositoryIndexUrl(value) {
     const url = value.trim().replace(/\/+$/, "");
+    if (url.startsWith("https://github.com/")) {
+      const githubPath = new URL(url).pathname.replace(/^\/|\/$/g, "");
+      const rawMatch = githubPath.match(
+        /^([^/]+\/[^/]+)\/raw\/(.+\/index\.json)$/
+      );
+      if (rawMatch) {
+        return `https://raw.githubusercontent.com/${rawMatch[1]}/${rawMatch[2]}`;
+      }
+      const repository = githubPath.replace(/\/raw\/.*$/, "");
+      return `https://raw.githubusercontent.com/${repository}/refs/heads/main/index.json`;
+    }
+    if (url.endsWith("/index.json")) return url;
     if (url.endsWith(".json")) return url;
     if (url.includes("raw.githubusercontent.com/")) {
-      return `${url}/index.json`;
-    }
-    if (url.startsWith("https://github.com/")) {
-      return `${url}/raw/refs/heads/main/index.json`;
+      return `${url}/refs/heads/main/index.json`;
     }
     return `${url}/index.json`;
   }
@@ -137,6 +149,96 @@
     const response = await fetch(url);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     return response.text();
+  }
+
+  function compareVersions(left, right) {
+    const parse = value =>
+      String(value ?? "0.0.0")
+        .replace(/^v/i, "")
+        .split(".")
+        .map(part => Number.parseInt(part, 10) || 0);
+    const a = parse(left);
+    const b = parse(right);
+    for (let index = 0; index < Math.max(a.length, b.length); index++) {
+      if ((a[index] ?? 0) !== (b[index] ?? 0)) {
+        return (a[index] ?? 0) - (b[index] ?? 0);
+      }
+    }
+    return 0;
+  }
+
+  function setUpdateState(nextState) {
+    updateState = nextState;
+    const menuItem = document.getElementById(MENU_ITEM_ID);
+    if (!menuItem) return;
+    menuItem.querySelector("[data-teamsmonkey-update-badge]")?.remove();
+    if (!updateState.size) return;
+    const badge = document.createElement("span");
+    badge.dataset.teamsmonkeyUpdateBadge = "true";
+    badge.textContent = "Updates available";
+    Object.assign(badge.style, {
+      background: "#d13438",
+      borderRadius: "10px",
+      color: "#fff",
+      fontSize: "11px",
+      marginLeft: "8px",
+      padding: "2px 7px",
+    });
+    menuItem.append(badge);
+  }
+
+  async function checkForUpdates() {
+    if (updateCheckPromise) return updateCheckPromise;
+    updateCheckPromise = (async () => {
+      const installed = new Map(
+        (globalThis.__teamsUserscriptManifest ?? []).map(extension => [
+          extension.filename,
+          extension,
+        ])
+      );
+      const found = new Map();
+      for (const repository of readRepositories()) {
+        try {
+          const index = JSON.parse(
+            await fetchRepositoryResource(repository.indexUrl)
+          );
+          for (const extension of index.extensions ?? []) {
+            const filename = extension.filename ?? extension.path?.split("/").pop();
+            const current = installed.get(filename);
+            if (
+              current &&
+              extension.version &&
+              compareVersions(extension.version, current.version) > 0
+            ) {
+              found.set(filename, { repository, extension });
+            }
+          }
+        } catch (error) {
+          console.error(
+            `[Teams User scripts] Could not check ${repository.name}:`,
+            error
+          );
+        }
+      }
+      setUpdateState(found);
+      return found;
+    })().finally(() => {
+      updateCheckPromise = undefined;
+    });
+    return updateCheckPromise;
+  }
+
+  async function updateScript(filename, update) {
+    const source = await fetchRepositoryResource(
+      repositoryScriptUrl(update.repository, update.extension)
+    );
+    await globalThis.__teamsmonkeyDownloadScript({
+      filename,
+      source,
+    });
+    const nextState = new Map(updateState);
+    nextState.delete(filename);
+    setUpdateState(nextState);
   }
 
   function createLink(text, onClick) {
@@ -227,24 +329,34 @@
       status.textContent = "Loading scripts…";
       dialog.append(status);
       void (async () => {
-        try {
-          const repositories = readRepositories();
-          const results = await Promise.all(
-            repositories.map(async repository => {
-              try {
-                return {
-                  repository,
-                  index: JSON.parse(
-                    await fetchRepositoryResource(repository.indexUrl)
-                  ),
-                };
-              } catch (error) {
-                throw new Error(`${repository.name}: ${error.message}`);
-              }
-            })
-          );
-          status.remove();
-          for (const { repository, index } of results) {
+        const repositories = readRepositories();
+        const results = await Promise.all(
+          repositories.map(async repository => {
+            try {
+              return {
+                repository,
+                index: JSON.parse(
+                  await fetchRepositoryResource(repository.indexUrl)
+                ),
+              };
+            } catch (error) {
+              return { repository, error };
+            }
+          })
+        );
+        status.remove();
+        for (const { repository, index, error } of results) {
+          if (error) {
+            const row = document.createElement("p");
+            row.textContent = `Could not load ${repository.name}: ${
+              error.message.includes("Unexpected token")
+                ? "the repository did not return a valid index.json"
+                : error.message
+            }`;
+            row.style.color = "#d13438";
+            dialog.append(row);
+            continue;
+          }
             for (const extension of index.extensions ?? []) {
               const row = document.createElement("div");
               Object.assign(row.style, {
@@ -280,13 +392,9 @@
               dialog.append(row);
             }
           }
-          if (!dialog.querySelector("strong")) {
-            status.textContent = "No scripts were found.";
-            dialog.append(status);
-          }
-        } catch (error) {
-          status.textContent = `Could not load scripts: ${error.message}`;
-          console.error("[Teams User scripts]", error);
+        if (!dialog.querySelector("strong") && !dialog.querySelector("[style*='d13438']")) {
+          status.textContent = "No scripts were found.";
+          dialog.append(status);
         }
       })();
       const footer = document.createElement("div");
@@ -470,6 +578,23 @@
     header.append(title, closeButton);
     dialog.append(header);
 
+    const checkUpdates = createLink("Check for updates", async () => {
+      checkUpdates.disabled = true;
+      checkUpdates.textContent = "Checking…";
+      try {
+        await checkForUpdates();
+        closeModal();
+        openModal();
+      } catch (error) {
+        checkUpdates.disabled = false;
+        checkUpdates.textContent = "Check for updates";
+        console.error("[Teams User scripts]", error);
+      }
+    });
+    checkUpdates.style.display = "block";
+    checkUpdates.style.marginBottom = "12px";
+    dialog.append(checkUpdates);
+
     if (!extensions.length) {
       const empty = document.createElement("p");
       empty.textContent = "No user scripts are available.";
@@ -512,6 +637,26 @@
             openExtensionSettings(extension)
           );
           actions.append(settingsLink);
+        }
+
+        const update = updateState.get(extension.filename);
+        if (update) {
+          const updateLink = createLink(
+            `Update to ${update.extension.version}`,
+            async () => {
+              updateLink.disabled = true;
+              updateLink.textContent = "Updating…";
+              try {
+                await updateScript(extension.filename, update);
+                await restartTeams();
+              } catch (error) {
+                updateLink.disabled = false;
+                updateLink.textContent = `Update to ${update.extension.version}`;
+                console.error("[Teams User scripts]", error);
+              }
+            }
+          );
+          actions.append(updateLink);
         }
 
         if (extension.removable) {
@@ -582,6 +727,7 @@
     const referenceItem =
       menu.querySelector("[data-tid='settings-button-menu']") ?? ringMenuItem;
     ringMenuItem.before(createMenuItem(referenceItem));
+    setUpdateState(updateState);
   }
 
   function handleKeydown(event) {
@@ -596,10 +742,16 @@
   observer.observe(document.documentElement, { childList: true, subtree: true });
   window.addEventListener("keydown", handleKeydown, true);
   installMenuItem();
+  void checkForUpdates();
+  const updateInterval = window.setInterval(
+    () => void checkForUpdates(),
+    UPDATE_CHECK_INTERVAL_MS
+  );
 
   globalThis.__teamsUserExtensions = {
     destroy() {
       observer.disconnect();
+      window.clearInterval(updateInterval);
       window.removeEventListener("keydown", handleKeydown, true);
       document.getElementById(MENU_ITEM_ID)?.remove();
       closeModal();
