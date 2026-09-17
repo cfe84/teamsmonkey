@@ -15,6 +15,29 @@ files, doesn't touch your data, doesn't add any telemetry.
 
 ![User scripts manager](img/userscripts-manager.png)
 
+## How it works
+
+```mermaid
+flowchart LR
+    Teams[Teams desktop client]
+    CDP[Loopback Chrome DevTools Protocol]
+    Loader[Teamsmonkey loader]
+    Cache[Installed scripts cache]
+    Dev[Development directories]
+    Manager[Teamsmonkey menu and script manager]
+    Scripts[UserScripts]
+    Catalogue[Script catalogues]
+
+    Teams --> CDP
+    Loader <-->|attach and inject| CDP
+    Cache --> Loader
+    Dev --> Loader
+    Loader --> Scripts
+    Loader --> Manager
+    Manager -->|fetch and install| Catalogue
+    Manager -->|enable, disable, update| Scripts
+```
+
 The bundled **User scripts** manager lets you enable and disable installed
 scripts, browse the default
 [teams-user-scripts](https://github.com/cfe84/teams-user-scripts) catalogue,
@@ -25,11 +48,11 @@ updates. Updates are checked when Teams loads and hourly while it is running.
 
 ## Run the loader
 
-Node.js 22 or newer is required:
+Go 1.23 or newer is required to build the standalone loader:
 
 ```bash
-npm install
-node teamsmonkey-loader.mjs --port 9223
+go build -o teamsmonkey .
+./teamsmonkey --port 9223
 ```
 
 The loader also accepts `--scripts`, `--port`, `--host`, `--target`, and
@@ -41,13 +64,14 @@ The loader also accepts `--scripts`, `--port`, `--host`, `--target`, and
 To configure the Teams CDP environment and keep the loader running:
 
 ```bash
-npm run service:install
+go build -o teamsmonkey .
+./teamsmonkey --service-install
 ```
 
 Fully quit and reopen Teams after installation. To remove the launch agents:
 
 ```bash
-npm run service:uninstall
+./teamsmonkey --service-uninstall
 ```
 
 The loader must be connected to a loopback-only CDP endpoint. CDP has no
@@ -55,7 +79,8 @@ authentication, so any local process that can reach the endpoint can inspect
 and control signed-in Teams content.
 
 The launch agents are named `com.teamsmonkey.env` and
-`com.teamsmonkey.loader`.
+`com.teamsmonkey.loader`. Service management is implemented by the Go binary,
+so Node.js is not required.
 
 ## Development and technical details
 
@@ -77,7 +102,7 @@ the Teamsmonkey configuration and scanned at loader startup and whenever their
 contents change. Scripts in the cache directory take precedence over
 development-directory scripts with the same filename.
 
-Private GitHub script repositories are supported through the local Node loader.
+Private GitHub script repositories are supported through the standalone loader.
 If GitHub CLI is installed and authenticated, Teamsmonkey automatically uses
 `gh auth token` without copying the token into Teams. You can also provide a
 token explicitly with `TEAMSMONKEY_GITHUB_TOKEN`; `TEAMSMONKEY_GH_PATH` can be
