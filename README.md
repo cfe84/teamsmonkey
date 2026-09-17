@@ -1,5 +1,7 @@
 # Teamsmonkey
 
+![Teamsmonkey](./img/teamsmonkey.png)
+
 Teamsmonkey is a sidecar UserScript loader for the Microsoft Teams desktop
 client. When installed on your system, it adds a menu in Teams that allows
 you to load userscripts. Userscripts are small scripts allowing you to
