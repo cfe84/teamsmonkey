@@ -630,7 +630,7 @@
     });
     const title = document.createElement("h2");
     title.id = `${MODAL_ID}-title`;
-    title.textContent = "User scripts";
+    title.textContent = "Teamsmonkey";
     Object.assign(title.style, {
       fontSize: "20px",
       lineHeight: "28px",
@@ -796,7 +796,7 @@
     item.className = referenceItem.className;
     item.setAttribute("role", "menuitem");
     item.tabIndex = 0;
-    item.textContent = "User scripts";
+    item.textContent = "Teamsmonkey";
     item.addEventListener("click", openModal);
     item.addEventListener("keydown", event => {
       if (event.key !== "Enter" && event.key !== " ") return;
