@@ -46,9 +46,42 @@ updates. Updates are checked when Teams loads and hourly while it is running.
 
 ![Embedded scripts catalogue](img/get-more-scripts.png)
 
+## Install pre-built binaries
+
+Pre-built releases are available at
+[github.com/cfe84/teamsmonkey/releases](https://github.com/cfe84/teamsmonkey/releases).
+Download the ZIP for your operating system and CPU architecture, then extract
+it without changing the directory structure. The ZIP includes the loader and
+the bundled UserScripts.
+
+On Apple Silicon macOS:
+
+```bash
+mkdir -p "$HOME/.local/teamsmonkey"
+curl -L https://github.com/cfe84/teamsmonkey/releases/latest/download/teamsmonkey-darwin-arm64.zip \
+  -o /tmp/teamsmonkey.zip
+unzip -o /tmp/teamsmonkey.zip -d "$HOME/.local/teamsmonkey"
+chmod +x "$HOME/.local/teamsmonkey/teamsmonkey"
+cd "$HOME/.local/teamsmonkey"
+./teamsmonkey --service-install
+```
+
+For Intel macOS, replace `darwin-arm64` with `darwin-amd64`. On Windows,
+download `teamsmonkey-windows-amd64.zip`, extract it, open PowerShell in the
+extracted directory, and run:
+
+```powershell
+.\teamsmonkey.exe --service-install
+```
+
+The service installer checks that Teams is configured with CDP support. Follow
+the platform-specific instructions in [Service installation](#service-installation)
+if it reports that CDP is not enabled.
+
 ## Run the loader
 
-Go 1.23 or newer is required to build the standalone loader:
+For development or platforms without a pre-built release, Go 1.23 or newer is
+required to build the standalone loader:
 
 ```bash
 make build

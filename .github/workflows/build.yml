@@ -5,11 +5,13 @@ on:
     branches:
       - main
       - master
+    tags:
+      - "*"
   pull_request:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   test:
@@ -84,3 +86,21 @@ jobs:
           name: teamsmonkey-${{ matrix.goos }}-${{ matrix.goarch }}
           path: teamsmonkey-${{ matrix.goos }}-${{ matrix.goarch }}.zip
           if-no-files-found: error
+
+  release:
+    name: Create GitHub release
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: teamsmonkey-*
+          merge-multiple: true
+          path: release-assets
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${GITHUB_REF_NAME}" release-assets/*.zip --repo "${GITHUB_REPOSITORY}" --generate-notes
