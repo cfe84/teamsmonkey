@@ -29,6 +29,7 @@ const (
 	fetchBind  = "__teamsmonkeyFetchBinding"
 	removeBind = "__teamsmonkeyRemoveScriptBinding"
 	dirsBind   = "__teamsmonkeyScriptDirectoriesBinding"
+	cdpPort    = "9223"
 )
 
 type Script struct {
@@ -38,8 +39,11 @@ type Script struct {
 }
 type Meta struct{ m map[string][]string }
 type Target struct {
-	ID, Title, URL, WS string
-	Type               string
+	ID    string `json:"id"`
+	Title string `json:"title"`
+	URL   string `json:"url"`
+	WS    string `json:"webSocketDebuggerUrl"`
+	Type  string `json:"type"`
 }
 type Conn struct {
 	ws            *websocket.Conn
@@ -61,6 +65,7 @@ type Loader struct {
 	dirs                                    []string
 	scripts                                 []Script
 	rev                                     int
+	signature                               string
 	conns                                   map[string]*Conn
 	token                                   string
 }
@@ -86,8 +91,8 @@ func main() {
 	flag.StringVar(&l.host, "host", "", "")
 	var ms int
 	flag.IntVar(&ms, "poll-ms", 1000, "")
-	installService := flag.Bool("service-install", false, "install the macOS launch agents")
-	uninstallService := flag.Bool("service-uninstall", false, "remove the macOS launch agents")
+	installService := flag.Bool("service-install", false, "install the Teamsmonkey service")
+	uninstallService := flag.Bool("service-uninstall", false, "remove the Teamsmonkey service")
 	flag.Parse()
 	if *installService || *uninstallService {
 		if e := manageService(*installService); e != nil {
@@ -207,6 +212,22 @@ func (l *Loader) load() {
 		}
 		out = append(out, x)
 	}
+	var signature strings.Builder
+	for _, s := range out {
+		fmt.Fprintf(&signature, "%s\x00%s\x00%s\x00%s\x00%t\x00", s.Name, s.Version, s.Path, s.Hash, s.Toggleable)
+		for _, r := range s.Includes {
+			signature.WriteString(r.String())
+			signature.WriteByte(0)
+		}
+		for _, r := range s.Excludes {
+			signature.WriteString(r.String())
+			signature.WriteByte(0)
+		}
+	}
+	if signature.String() == l.signature {
+		return
+	}
+	l.signature = signature.String()
 	l.scripts = out
 	l.rev++
 	fmt.Printf("Loaded %d userscript(s)\n", len(out))
@@ -299,6 +320,7 @@ func connect(l *Loader, wsurl string) (*Conn, error) {
 		for {
 			var m map[string]interface{}
 			if e := s.ReadJSON(&m); e != nil {
+				fmt.Fprintf(os.Stderr, "CDP connection closed: %v\n", e)
 				return
 			}
 			if method, ok := m["method"].(string); ok && method == "Runtime.bindingCalled" {
@@ -327,16 +349,26 @@ func connect(l *Loader, wsurl string) (*Conn, error) {
 }
 func (l *Loader) install(c *Conn, t Target, disabled []string) error {
 	for _, id := range c.registrations {
-		l.request(c, "Page.removeScriptToEvaluateOnNewDocument", map[string]interface{}{"identifier": id})
+		if _, e := l.request(c, "Page.removeScriptToEvaluateOnNewDocument", map[string]interface{}{"identifier": id}); e != nil {
+			return fmt.Errorf("remove previous script: %w", e)
+		}
 	}
 	c.registrations = nil
 	for _, b := range []string{relay, download, fetchBind, removeBind, dirsBind} {
-		l.request(c, "Runtime.addBinding", map[string]interface{}{"name": b})
+		if _, e := l.request(c, "Runtime.addBinding", map[string]interface{}{"name": b}); e != nil {
+			return fmt.Errorf("add binding %q: %w", b, e)
+		}
 	}
-	l.request(c, "Runtime.enable", nil)
-	l.request(c, "Page.enable", nil)
+	if _, e := l.request(c, "Runtime.enable", nil); e != nil {
+		return fmt.Errorf("enable runtime: %w", e)
+	}
+	if _, e := l.request(c, "Page.enable", nil); e != nil {
+		return fmt.Errorf("enable page: %w", e)
+	}
 	for _, src := range []string{`globalThis.__teamsVimiumHintContext={}`, l.manifest(), l.bridge()} {
-		l.request(c, "Runtime.evaluate", map[string]interface{}{"expression": src})
+		if _, e := l.request(c, "Runtime.evaluate", map[string]interface{}{"expression": src}); e != nil {
+			return fmt.Errorf("evaluate bootstrap: %w", e)
+		}
 	}
 	for _, s := range l.scripts {
 		x := l.wrapped(s, disabled)
@@ -348,7 +380,9 @@ func (l *Loader) install(c *Conn, t Target, disabled []string) error {
 			c.registrations = append(c.registrations, z)
 		}
 		if applies(s, t.URL) {
-			l.request(c, "Runtime.evaluate", map[string]interface{}{"expression": x, "awaitPromise": true})
+			if _, e := l.request(c, "Runtime.evaluate", map[string]interface{}{"expression": x, "awaitPromise": true}); e != nil {
+				return fmt.Errorf("evaluate %q: %w", s.Name, e)
+			}
 		}
 	}
 	c.revision = l.rev
@@ -552,13 +586,20 @@ func (l *Loader) reconcile() error {
 	for _, t := range match {
 		c := l.conns[t.ID]
 		if c == nil {
-			ws := strings.Replace(t.WS, "ws://127.0.0.1", "ws://"+host+":"+l.port, 1)
-			ws = strings.Replace(ws, "ws://localhost", "ws://"+host+":"+l.port, 1)
+			wsURL, parseErr := url.Parse(t.WS)
+			if parseErr != nil {
+				fmt.Fprintf(os.Stderr, "Could not attach to %q (%s): invalid WebSocket URL %q: %v\n", t.Title, t.URL, t.WS, parseErr)
+				continue
+			}
+			wsURL.Host = host + ":" + l.port
+			ws := wsURL.String()
 			c, e = connect(l, ws)
 			if e != nil {
+				fmt.Fprintf(os.Stderr, "Could not attach to %q (%s): %v\n", t.Title, t.URL, e)
 				continue
 			}
 			l.conns[t.ID] = c
+			fmt.Printf("Attached to %q (%s)\n", t.Title, t.URL)
 		}
 		if !strings.HasPrefix(t.URL, "https://outlook.office.com/hosted/calendar/") {
 			if r, x := l.request(c, "Runtime.evaluate", map[string]interface{}{"expression": `(() => { try { const value = JSON.parse(localStorage.getItem("teams.userscripts.disabled") ?? "[]"); return Array.isArray(value) ? value : []; } catch (_) { return []; } })()`, "returnByValue": true}); x == nil {
@@ -574,15 +615,32 @@ func (l *Loader) reconcile() error {
 			}
 		}
 		if c.revision != l.rev {
-			l.install(c, t, disabled[t.ID])
+			if e := l.install(c, t, disabled[t.ID]); e != nil {
+				fmt.Fprintf(os.Stderr, "Could not inject into %q (%s): %v\n", t.Title, t.URL, e)
+				continue
+			}
+			for _, s := range l.scripts {
+				if applies(s, t.URL) {
+					fmt.Printf("Injected %q into %q\n", s.Name, t.Title)
+				}
+			}
 		}
 	}
 	return nil
 }
 
 func manageService(install bool) error {
+	if runtime.GOOS == "windows" {
+		return manageWindowsService(install)
+	}
 	if runtime.GOOS != "darwin" {
-		return errors.New("service management is only supported on macOS")
+		return errors.New("service management is only supported on macOS and Windows")
+	}
+	if install && !cdpConfiguredOrRunning() {
+		return errors.New("Teams is not configured for CDP and is not currently exposing CDP on port 9223.\n\n" +
+			"To enable CDP, run:\n" +
+			"  launchctl setenv WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS --remote-debugging-port=9223\n" +
+			"Then fully quit Teams, reopen it, and run `make install` again.")
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -634,6 +692,82 @@ func manageService(install bool) error {
 	}
 	return launchctl([]string{"setenv", "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--remote-debugging-port=9223"}, false)
 }
+
+func cdpConfiguredOrRunning() bool {
+	if strings.Contains(os.Getenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"), "--remote-debugging-port") {
+		return true
+	}
+	if output, err := exec.Command("/bin/launchctl", "getenv", "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").Output(); err == nil && strings.Contains(string(output), "--remote-debugging-port") {
+		return true
+	}
+	client := http.Client{Timeout: time.Second}
+	response, err := client.Get("http://127.0.0.1:" + cdpPort + "/json/version")
+	if err != nil {
+		return false
+	}
+	defer response.Body.Close()
+	return response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices
+}
+
+const windowsTaskName = "Teamsmonkey"
+
+func manageWindowsService(install bool) error {
+	if install && !windowsCDPConfiguredOrRunning() {
+		return errors.New("Teams is not configured for CDP and is not currently exposing CDP on port 9223.\n\n" +
+			"To enable CDP in Windows PowerShell, run:\n" +
+			"  [Environment]::SetEnvironmentVariable('WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS', '--remote-debugging-port=9223', 'User')\n" +
+			"Then fully quit and reopen Teams, and run `make install` again.")
+	}
+	if err := windowsSchtasks("/Delete", "/TN", windowsTaskName, "/F"); err != nil && !strings.Contains(strings.ToLower(err.Error()), "cannot find") && !strings.Contains(strings.ToLower(err.Error()), "does not exist") {
+		return err
+	}
+	if !install {
+		return nil
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolve loader executable: %w", err)
+	}
+	scripts := os.Getenv("TEAMSMONKEY_SCRIPT_PATH")
+	if scripts == "" {
+		scripts = optionDefaults().scriptsDir
+	}
+	command := fmt.Sprintf(`"%s" --port 9223 --scripts "%s"`, exe, scripts)
+	if err := windowsSchtasks("/Create", "/SC", "ONLOGON", "/TN", windowsTaskName, "/TR", command, "/F"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func windowsCDPConfiguredOrRunning() bool {
+	if strings.Contains(os.Getenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"), "--remote-debugging-port") {
+		return true
+	}
+	if output, err := exec.Command("reg", "query", `HKCU\Environment`, "/v", "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").Output(); err == nil && strings.Contains(string(output), "--remote-debugging-port") {
+		return true
+	}
+	client := http.Client{Timeout: time.Second}
+	response, err := client.Get("http://127.0.0.1:" + cdpPort + "/json/version")
+	if err != nil {
+		return false
+	}
+	defer response.Body.Close()
+	return response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices
+}
+
+func windowsSchtasks(args ...string) error {
+	cmd := exec.Command("schtasks.exe", args...)
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	detail := strings.TrimSpace(string(output))
+	if detail == "" {
+		detail = err.Error()
+	}
+	return fmt.Errorf("schtasks %s failed: %s", strings.Join(args, " "), detail)
+}
+
 func launchctl(args []string, allowNotLoaded bool) error {
 	cmd := exec.Command("/bin/launchctl", args...)
 	output, err := cmd.CombinedOutput()

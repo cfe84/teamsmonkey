@@ -51,7 +51,7 @@ updates. Updates are checked when Teams loads and hourly while it is running.
 Go 1.23 or newer is required to build the standalone loader:
 
 ```bash
-go build -o teamsmonkey .
+make build
 ./teamsmonkey --port 9223
 ```
 
@@ -59,28 +59,54 @@ The loader also accepts `--scripts`, `--port`, `--host`, `--target`, and
 `--poll-ms`. The `--scripts` option takes precedence over
 `TEAMSMONKEY_SCRIPT_PATH`.
 
-## macOS launch agent
+## Service installation
 
-To configure the Teams CDP environment and keep the loader running:
-
-```bash
-go build -o teamsmonkey .
-./teamsmonkey --service-install
-```
-
-Fully quit and reopen Teams after installation. To remove the launch agents:
+On macOS, this installs launch agents. On Windows, it installs a per-user
+Task Scheduler task that starts Teamsmonkey when you sign in:
 
 ```bash
-./teamsmonkey --service-uninstall
+make install
 ```
+
+The service install checks that Teams is already exposing CDP or that
+`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` is configured for the user. If it is
+not configured, set it before installing.
+
+On macOS:
+
+```bash
+launchctl setenv WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS --remote-debugging-port=9223
+```
+
+On Windows PowerShell:
+
+```powershell
+[Environment]::SetEnvironmentVariable(
+  'WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS',
+  '--remote-debugging-port=9223',
+  'User'
+)
+```
+
+Fully quit and reopen Teams after changing the environment, then run
+`make install` again. To remove the service:
+
+```bash
+make uninstall
+```
+
+On Windows, uninstall removes only the Teamsmonkey scheduled task. It does
+not remove `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`, because that setting may
+be used by other WebView2 applications.
 
 The loader must be connected to a loopback-only CDP endpoint. CDP has no
 authentication, so any local process that can reach the endpoint can inspect
 and control signed-in Teams content.
 
-The launch agents are named `com.teamsmonkey.env` and
-`com.teamsmonkey.loader`. Service management is implemented by the Go binary,
-so Node.js is not required.
+The macOS launch agents are named `com.teamsmonkey.env` and
+`com.teamsmonkey.loader`. The Windows scheduled task is named `Teamsmonkey`.
+Service management is implemented by the Go binary, so Node.js is not
+required.
 
 ## Development and technical details
 
