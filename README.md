@@ -66,12 +66,79 @@ cd "$HOME/.local/teamsmonkey"
 ./teamsmonkey --service-install
 ```
 
-For Intel macOS, replace `darwin-arm64` with `darwin-amd64`. On Windows,
-download `teamsmonkey-windows-amd64.zip`, extract it, open PowerShell in the
-extracted directory, and run:
+For Intel macOS, replace `darwin-arm64` with `darwin-amd64`.
+
+For a one-line macOS installation, run the installer directly from
+the repository:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cfe84/teamsmonkey/main/install.sh | bash
+```
+
+The script detects Apple Silicon or Intel macOS, downloads the latest matching
+release, installs it under `~/.local/teamsmonkey`, enables the Teams CDP
+environment setting, and registers the service.
+
+### Windows
+
+The Windows release supports 64-bit Windows (`amd64`). Download
+`teamsmonkey-windows-amd64.zip` from the
+[releases page](https://github.com/cfe84/teamsmonkey/releases), extract it to
+a permanent directory such as
+`$env:LOCALAPPDATA\Teamsmonkey`, and open PowerShell in that directory:
+
+```powershell
+$installDir = "$env:LOCALAPPDATA\Teamsmonkey"
+New-Item -ItemType Directory -Force $installDir | Out-Null
+Expand-Archive "$env:USERPROFILE\Downloads\teamsmonkey-windows-amd64.zip" `
+  -DestinationPath $installDir -Force
+Set-Location $installDir
+```
+
+Before installing the service, configure Teams to expose its local Chrome
+DevTools Protocol endpoint:
+
+```powershell
+[Environment]::SetEnvironmentVariable(
+  "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+  "--remote-debugging-port=9223",
+  "User"
+)
+```
+
+Fully quit Teams and start it again so the new user environment variable is
+picked up. Then install the per-user Task Scheduler task:
 
 ```powershell
 .\teamsmonkey.exe --service-install
+```
+
+PowerShell can perform the same installation from one line:
+
+```powershell
+irm https://raw.githubusercontent.com/cfe84/teamsmonkey/main/install.ps1 | iex
+```
+
+The script downloads the latest Windows amd64 release to
+`%LOCALAPPDATA%\Teamsmonkey`, configures the user CDP environment setting, and
+registers the `Teamsmonkey` scheduled task.
+
+The task is named `Teamsmonkey` and starts the loader when you sign in. The
+installer checks the configured environment variable or an already-running
+CDP endpoint before creating the task. If it reports that CDP is unavailable,
+quit Teams completely, reopen it, and run the install command again.
+
+To check that Teams is listening on the expected port:
+
+```powershell
+Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort 9223 -State Listen
+Invoke-WebRequest http://127.0.0.1:9223/json/version
+```
+
+To remove the scheduled task without removing the CDP environment variable:
+
+```powershell
+.\teamsmonkey.exe --service-uninstall
 ```
 
 The service installer checks that Teams is configured with CDP support. Follow
@@ -94,8 +161,11 @@ The loader also accepts `--scripts`, `--port`, `--host`, `--target`, and
 
 ## Service installation
 
-On macOS, this installs launch agents. On Windows, it installs a per-user
-Task Scheduler task that starts Teamsmonkey when you sign in:
+On macOS, this installs launch agents. On Windows, source builds install a
+per-user Task Scheduler task that starts Teamsmonkey when you sign in. For a
+pre-built Windows release, use `teamsmonkey.exe` directly as described above.
+
+For macOS or a source build:
 
 ```bash
 make install
@@ -121,8 +191,9 @@ On Windows PowerShell:
 )
 ```
 
-Fully quit and reopen Teams after changing the environment, then run
-`make install` again. To remove the service:
+Fully quit and reopen Teams after changing the environment, then run the
+service installation command again. To remove a macOS service or a source-built
+service:
 
 ```bash
 make uninstall
