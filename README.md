@@ -121,7 +121,10 @@ irm https://raw.githubusercontent.com/cfe84/teamsmonkey/main/install.ps1 | iex
 
 The script downloads the latest Windows amd64 release to
 `%LOCALAPPDATA%\Teamsmonkey`, configures the user CDP environment setting, and
-registers the `Teamsmonkey` scheduled task.
+registers the `Teamsmonkey` scheduled task. If Windows reports
+`Access is denied`, run PowerShell as the signed-in user rather than as a
+different administrator account, remove any existing task named
+`Teamsmonkey` in Task Scheduler, and run the command again.
 
 The task is named `Teamsmonkey` and starts the loader when you sign in. The
 installer checks the configured environment variable or an already-running

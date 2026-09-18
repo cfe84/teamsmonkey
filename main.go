@@ -733,7 +733,7 @@ func manageWindowsService(install bool) error {
 		scripts = optionDefaults().scriptsDir
 	}
 	command := fmt.Sprintf(`"%s" --port 9223 --scripts "%s"`, exe, scripts)
-	if err := windowsSchtasks("/Create", "/SC", "ONLOGON", "/TN", windowsTaskName, "/TR", command, "/F"); err != nil {
+	if err := windowsSchtasks("/Create", "/SC", "ONLOGON", "/TN", windowsTaskName, "/TR", command, "/RL", "LIMITED", "/F"); err != nil {
 		return err
 	}
 	return nil

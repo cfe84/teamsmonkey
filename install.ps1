@@ -23,6 +23,9 @@ try {
   )
 
   & (Join-Path $installDir "teamsmonkey.exe") --service-install
+  if ($LASTEXITCODE -ne 0) {
+    throw "Teamsmonkey service installation failed with exit code $LASTEXITCODE."
+  }
   Write-Host "Teamsmonkey installed in $installDir"
   Write-Host "Fully quit and reopen Teams to apply the CDP setting."
 } finally {
