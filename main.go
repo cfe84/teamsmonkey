@@ -276,20 +276,27 @@ func regexSources(a []*regexp.Regexp) []string {
 	}
 	return o
 }
-func (l *Loader) wrapped(s Script, disabled []string) string {
+func (l *Loader) wrapped(s Script, disabled []string, immediate bool) string {
+	if disabled == nil {
+		disabled = []string{}
+	}
 	inc, exc := regexSources(s.Includes), regexSources(s.Excludes)
 	key := s.Name + ":" + s.Hash
 	ex := fmt.Sprintf(`()=>{const r=globalThis.__teamsUserscriptLoader??=new Set();if(r.has(%s))return;r.add(%s);try{%s}catch(error){console.error(%s,error)}}`, jsq(key), jsq(key), s.Source, jsq("[userscript] "+s.Name))
 	var schedule string
-	switch s.RunAt {
-	case "document-start":
+	if immediate {
 		schedule = "(" + ex + ")()"
-	case "document-end":
-		schedule = "document.readyState==='loading'?document.addEventListener('DOMContentLoaded'," + ex + ",{once:true}):(" + ex + ")()"
-	default:
-		schedule = "document.readyState==='complete'?setTimeout(" + ex + ",0):addEventListener('load',()=>setTimeout(" + ex + ",0),{once:true})"
+	} else {
+		switch s.RunAt {
+		case "document-start":
+			schedule = "(" + ex + ")()"
+		case "document-end":
+			schedule = "document.readyState==='loading'?document.addEventListener('DOMContentLoaded'," + ex + ",{once:true}):(" + ex + ")()"
+		default:
+			schedule = "document.readyState==='complete'?setTimeout(" + ex + ",0):addEventListener('load',()=>setTimeout(" + ex + ",0),{once:true})"
+		}
 	}
-	return fmt.Sprintf(`(()=>{const u=location.href,i=%s.map(v=>new RegExp(v)),e=%s.map(v=>new RegExp(v));if(!i.some(p=>p.test(u))||e.some(p=>p.test(u)))return;const d=%s;if(%t&&d.includes(%s)){(globalThis.__teamsUserscriptLoader??=new Set()).add(%s);return};%s})();//# sourceURL=teams-userscript://%s.user.js`, jsq(inc), jsq(exc), jsq(disabled), s.Toggleable, jsq(s.Name), jsq(key), schedule, url.QueryEscape(s.Name))
+	return fmt.Sprintf(`(()=>{const u=location.href,i=%s.map(v=>new RegExp(v)),e=%s.map(v=>new RegExp(v));if(!i.some(p=>p.test(u))||e.some(p=>p.test(u)))return;const d=%s??[];if(%t&&d.includes(%s)){(globalThis.__teamsUserscriptLoader??=new Set()).add(%s);return};%s})();//# sourceURL=teams-userscript://%s.user.js`, jsq(inc), jsq(exc), jsq(disabled), s.Toggleable, jsq(s.Name), jsq(key), schedule, url.QueryEscape(s.Name))
 }
 func (l *Loader) request(c *Conn, method string, params map[string]interface{}) (map[string]interface{}, error) {
 	c.mu.Lock()
@@ -304,6 +311,11 @@ func (l *Loader) request(c *Conn, method string, params map[string]interface{}) 
 	}
 	select {
 	case x := <-ch:
+		if method == "Runtime.evaluate" && x.err == nil {
+			if details, ok := x.v["exceptionDetails"].(map[string]interface{}); ok {
+				return nil, fmt.Errorf("runtime exception: %v", details)
+			}
+		}
 		return x.v, x.err
 	case <-time.After(10 * time.Second):
 		return nil, fmt.Errorf("%s timed out", method)
@@ -323,10 +335,17 @@ func connect(l *Loader, wsurl string) (*Conn, error) {
 				fmt.Fprintf(os.Stderr, "CDP connection closed: %v\n", e)
 				return
 			}
-			if method, ok := m["method"].(string); ok && method == "Runtime.bindingCalled" {
+			method, _ := m["method"].(string)
+			if method == "Runtime.bindingCalled" {
 				if p, ok := m["params"].(map[string]interface{}); ok {
 					l.binding(c, fmt.Sprint(p["name"]), fmt.Sprint(p["payload"]))
 				}
+				continue
+			}
+			if method == "Page.frameNavigated" {
+				c.mu.Lock()
+				c.revision = 0
+				c.mu.Unlock()
 				continue
 			}
 			if id, ok := m["id"].(float64); ok {
@@ -371,7 +390,7 @@ func (l *Loader) install(c *Conn, t Target, disabled []string) error {
 		}
 	}
 	for _, s := range l.scripts {
-		x := l.wrapped(s, disabled)
+		x := l.wrapped(s, disabled, false)
 		r, e := l.request(c, "Page.addScriptToEvaluateOnNewDocument", map[string]interface{}{"source": x})
 		if e != nil {
 			return e
@@ -380,7 +399,8 @@ func (l *Loader) install(c *Conn, t Target, disabled []string) error {
 			c.registrations = append(c.registrations, z)
 		}
 		if applies(s, t.URL) {
-			if _, e := l.request(c, "Runtime.evaluate", map[string]interface{}{"expression": x, "awaitPromise": true}); e != nil {
+			current := l.wrapped(s, disabled, true)
+			if _, e := l.request(c, "Runtime.evaluate", map[string]interface{}{"expression": current, "awaitPromise": true}); e != nil {
 				return fmt.Errorf("evaluate %q: %w", s.Name, e)
 			}
 		}
