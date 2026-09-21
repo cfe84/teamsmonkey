@@ -51,10 +51,22 @@ updates. Updates are checked when Teams loads and hourly while it is running.
 Pre-built releases are available at
 [github.com/cfe84/teamsmonkey/releases](https://github.com/cfe84/teamsmonkey/releases).
 Download the ZIP for your operating system and CPU architecture, then extract
-it without changing the directory structure. The ZIP includes the loader and
-the bundled UserScripts.
+it without changing the directory structure. The ZIP includes the loader and the bundled UserScripts.
 
-On Apple Silicon macOS:
+### macOS
+
+The recommended installation is this one-liner:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cfe84/teamsmonkey/main/install.sh | bash
+```
+
+It detects Apple Silicon or Intel macOS, downloads the latest matching
+release, installs it under `~/.local/teamsmonkey`, enables the Teams CDP
+environment setting, and registers the service. Fully quit and reopen Teams
+after the installer completes.
+
+If you do not want to execute the installer script, install manually:
 
 ```bash
 mkdir -p "$HOME/.local/teamsmonkey"
@@ -68,23 +80,35 @@ cd "$HOME/.local/teamsmonkey"
 
 For Intel macOS, replace `darwin-arm64` with `darwin-amd64`.
 
-For a one-line macOS installation, run the installer directly from
-the repository:
+To uninstall the macOS service:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/cfe84/teamsmonkey/main/install.sh | bash
+"$HOME/.local/teamsmonkey/teamsmonkey" --service-uninstall
 ```
 
-The script detects Apple Silicon or Intel macOS, downloads the latest matching
-release, installs it under `~/.local/teamsmonkey`, enables the Teams CDP
-environment setting, and registers the service.
+This removes the launch agents but leaves the downloaded files and CDP
+environment setting in place. To remove the installation files as well:
+
+```bash
+rm -rf "$HOME/.local/teamsmonkey"
+```
 
 ### Windows
 
-The Windows release supports 64-bit Windows (`amd64`). Download
+The recommended installation is this one-liner:
+
+```powershell
+irm https://raw.githubusercontent.com/cfe84/teamsmonkey/main/install.ps1 | iex
+```
+
+It downloads the latest Windows amd64 release to
+`%LOCALAPPDATA%\Teamsmonkey`, configures the user CDP environment setting, and
+registers the `Teamsmonkey` scheduled task. Fully quit and reopen Teams after
+the installer completes.
+
+If you do not want to execute the installer script, install manually. Download
 `teamsmonkey-windows-amd64.zip` from the
 [releases page](https://github.com/cfe84/teamsmonkey/releases), extract it to
-a permanent directory such as
 `$env:LOCALAPPDATA\Teamsmonkey`, and open PowerShell in that directory:
 
 ```powershell
@@ -113,15 +137,7 @@ picked up. Then install the per-user Task Scheduler task:
 .\teamsmonkey.exe --service-install
 ```
 
-PowerShell can perform the same installation from one line:
-
-```powershell
-irm https://raw.githubusercontent.com/cfe84/teamsmonkey/main/install.ps1 | iex
-```
-
-The script downloads the latest Windows amd64 release to
-`%LOCALAPPDATA%\Teamsmonkey`, configures the user CDP environment setting, and
-registers the `Teamsmonkey` scheduled task. If Windows reports
+If Windows reports
 `Access is denied`, run PowerShell as the signed-in user rather than as a
 different administrator account, remove any existing task named
 `Teamsmonkey` in Task Scheduler, and run the command again.
@@ -142,6 +158,12 @@ To remove the scheduled task without removing the CDP environment variable:
 
 ```powershell
 .\teamsmonkey.exe --service-uninstall
+```
+
+To remove the Windows installation files as well:
+
+```powershell
+Remove-Item -Recurse -Force "$env:LOCALAPPDATA\Teamsmonkey"
 ```
 
 The service installer checks that Teams is configured with CDP support. Follow
