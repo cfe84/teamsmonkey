@@ -87,9 +87,13 @@
       );
       return [
         MAIN_REPOSITORY,
-        ...(Array.isArray(value) ? value : []).filter(
-          repository => repository?.indexUrl && repository.indexUrl !== MAIN_REPOSITORY.indexUrl
-        ),
+        ...(Array.isArray(value) ? value : [])
+          .filter(repository => repository?.indexUrl)
+          .map(repository => ({
+            ...repository,
+            indexUrl: repositoryIndexUrl(repository.indexUrl),
+          }))
+          .filter(repository => repository.indexUrl !== MAIN_REPOSITORY.indexUrl),
       ];
     } catch (error) {
       console.error("[Teams User scripts]", error);
@@ -111,12 +115,19 @@
   function repositoryIndexUrl(value) {
     const url = value.trim().replace(/\/+$/, "");
     if (url.startsWith("https://github.com/")) {
-      const githubPath = new URL(url).pathname.replace(/^\/|\/$/g, "");
+      const githubUrl = new URL(url);
+      const githubPath = githubUrl.pathname.replace(/^\/|\/$/g, "");
       const rawMatch = githubPath.match(
         /^([^/]+\/[^/]+)\/raw\/(.+\/index\.json)$/
       );
       if (rawMatch) {
         return `https://raw.githubusercontent.com/${rawMatch[1]}/${rawMatch[2]}`;
+      }
+      const blobMatch = githubPath.match(
+        /^([^/]+\/[^/]+)\/blob\/([^/]+)\/(.+\/index\.json)$/
+      );
+      if (blobMatch) {
+        return `https://raw.githubusercontent.com/${blobMatch[1]}/${blobMatch[2]}/${blobMatch[3]}`;
       }
       const repository = githubPath.replace(/\/raw\/.*$/, "");
       return `https://raw.githubusercontent.com/${repository}/refs/heads/main/index.json`;
@@ -142,7 +153,7 @@
 
   async function fetchRepositoryResource(url) {
     if (typeof globalThis.__teamsmonkeyFetch === "function") {
-      const result = await globalThis.__teamsmonkeyFetch(url);
+      const result = await globalThis.__teamsmonkeyFetch({ url });
       if (!result.ok) throw new Error(`HTTP ${result.status}`);
       return result.text;
     }

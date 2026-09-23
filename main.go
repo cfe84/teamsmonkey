@@ -52,6 +52,7 @@ type Conn struct {
 	pending       map[int]chan result
 	registrations []string
 	revision      int
+	closed        bool
 	hint          string
 }
 type result struct {
@@ -332,6 +333,9 @@ func connect(l *Loader, wsurl string) (*Conn, error) {
 		for {
 			var m map[string]interface{}
 			if e := s.ReadJSON(&m); e != nil {
+				c.mu.Lock()
+				c.closed = true
+				c.mu.Unlock()
 				fmt.Fprintf(os.Stderr, "CDP connection closed: %v\n", e)
 				return
 			}
@@ -366,6 +370,13 @@ func connect(l *Loader, wsurl string) (*Conn, error) {
 	}()
 	return c, nil
 }
+
+func (c *Conn) isClosed() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.closed
+}
+
 func (l *Loader) install(c *Conn, t Target, disabled []string) error {
 	for _, id := range c.registrations {
 		if _, e := l.request(c, "Page.removeScriptToEvaluateOnNewDocument", map[string]interface{}{"identifier": id}); e != nil {
@@ -435,8 +446,8 @@ func (l *Loader) binding(c *Conn, name, payload string) {
 			}
 		}
 	case fetchBind:
-		u, _ := url.Parse(fmt.Sprint(q["url"]))
-		if u.Scheme != "https" {
+		u, e := url.Parse(fmt.Sprint(q["url"]))
+		if e != nil || u.Scheme != "https" {
 			l.reply(c, "__teamsmonkeyFetchResult", id, "Only HTTPS URLs can be fetched", false)
 			return
 		}
@@ -444,7 +455,15 @@ func (l *Loader) binding(c *Conn, name, payload string) {
 		if l.token != "" && u.Hostname() == "raw.githubusercontent.com" {
 			req.Header.Set("Authorization", "Bearer "+l.token)
 		}
-		res, e := http.DefaultClient.Do(req)
+		client := http.Client{
+			CheckRedirect: func(redirectRequest *http.Request, _ []*http.Request) error {
+				if redirectRequest.URL.Scheme != "https" {
+					return errors.New("redirect target must use HTTPS")
+				}
+				return nil
+			},
+		}
+		res, e := client.Do(req)
 		if e != nil {
 			l.reply(c, "__teamsmonkeyFetchResult", id, e, false)
 			return
@@ -581,7 +600,7 @@ func (l *Loader) reconcile() error {
 		live[t.ID] = true
 	}
 	for id, c := range l.conns {
-		if !live[id] {
+		if !live[id] || c.isClosed() {
 			c.ws.Close()
 			delete(l.conns, id)
 		}
